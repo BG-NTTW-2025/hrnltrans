@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>NL → HR Spraakvertaler (Webapp)</title>
+  <style>
+    body { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; padding: 18px; max-width:800px; margin:auto; }
+    header { display:flex; align-items:center; gap:12px; }
+    button { padding:8px 12px; border-radius:8px; border:1px solid #ccc; background:#fff; cursor:pointer; }
+    textarea { width:100%; height:120px; margin-top:8px; padding:8px; font-size:1rem; }
+    .controls { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .status { margin-top:8px; color:#555 }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NL → HR Spraakvertaler</h1>
+  </header>
+
+  <p>Spreek of typ Nederlands en laat de app het in het Kroatisch uitspreken.</p>
+
+  <div class="controls">
+    <button id="btnStartRec">Start opname (spraak → tekst)</button>
+    <button id="btnStopRec" disabled>Stop opname</button>
+    <button id="btnPlayHR" disabled>Speel Kroatisch (tekst → spraak)</button>
+    <button id="btnTranslateAndSpeak" disabled>Vertaal & spreek uit</button>
+  </div>
+
+  <label for="txtInput">Tekst (handmatig aanpassen mogelijk):</label>
+  <textarea id="txtInput" placeholder="De gedetecteerde of getypte Nederlandse tekst verschijnt hier..."></textarea>
+
+  <div class="status" id="status">Status: klaar</div>
+
+  <script>
+    // ALLE variabelen helemaal bovenaan (volgens jouw voorkeur)
+    let recognitionAvailable;
+    let synthAvailable;
+    let recognition;
+    let isRecording = false;
+    let finalTranscript = '';
+    let detectionLang = 'nl-NL'; // Nederlands
+    let speakLang = 'hr-HR'; // Kroatisch (spraak)
+    const btnStartRec = document.getElementById('btnStartRec');
+    const btnStopRec = document.getElementById('btnStopRec');
+    const btnPlayHR = document.getElementById('btnPlayHR');
+    const btnTranslateAndSpeak = document.getElementById('btnTranslateAndSpeak');
+    const txtInput = document.getElementById('txtInput');
+    const statusEl = document.getElementById('status');
+
+    // Detectie voor Web Speech API (SpeechRecognition) en SpeechSynthesis
+    recognitionAvailable = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+    synthAvailable = 'speechSynthesis' in window;
+
+    // Initialiseer SpeechRecognition indien beschikbaar
+    if (recognitionAvailable) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SR();
+      recognition.lang = detectionLang;
+      recognition.interimResults = true;
+      recognition.continuous = false; // korte opnames. Zet true voor langere sessies
+
+      recognition.onstart = function() {
+        isRecording = true;
+        statusEl.textContent = 'Status: opnemen... (spreek nu)';
+        btnStartRec.disabled = true;
+        btnStopRec.disabled = false;
+      };
+
+      recognition.onresult = function(event) {
+        let interim = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            finalTranscript += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        txtInput.value = (finalTranscript + ' ' + interim).trim();
+      };
+
+      recognition.onerror = function(evt) {
+        statusEl.textContent = 'Fout bij spraakherkenning: ' + (evt.error || evt.message || 'onbekend');
+      };
+
+      recognition.onend = function() {
+        isRecording = false;
+        statusEl.textContent = 'Status: opname gestopt';
+        btnStartRec.disabled = false;
+        btnStopRec.disabled = true;
+        btnTranslateAndSpeak.disabled = txtInput.value.trim() === '';
+      };
+    } else {
+      statusEl.textContent = 'Let op: jouw browser ondersteunt geen spraak-naar-tekst (SpeechRecognition). Typ tekst in het veld.';
+      btnStartRec.disabled = true;
+      btnStopRec.disabled = true;
+    }
+
+    // Functie: start opname
+    function startRecording() {
+      finalTranscript = '';
+      txtInput.value = '';
+      try {
+        recognition.start();
+      } catch (e) {
+        // sommige browsers gooien een error als start wordt aangeroepen vlak na eerder start
+        statusEl.textContent = 'Kan opname niet starten: ' + e.message;
+      }
+    }
+
+    // Functie: stop opname
+    function stopRecording() {
+      if (recognition && isRecording) recognition.stop();
+    }
+
+    // Functie: vertalen (gebruik LibreTranslate als voorbeeld)
+    // Je kunt hier ook DeepL of Google Translate gebruiken — vaak is een API-key nodig.
+    // Standaard gebruiken we de publieke LibreTranslate endpoint (let op: CORS en rate limits).
+    async function translateText(text, source = 'nl', target = 'hr') {
+      statusEl.textContent = 'Status: vertalen...';
+      // Voor productie: vervang deze endpoint door jouw vertaal-API en voeg API-key toe.
+      const libreEndpoint = 'https://libretranslate.com/translate';
+
+      try {
+        const resp = await fetch(libreEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ q: text, source: source, target: target, format: 'text' })
+        });
+        if (!resp.ok) throw new Error('Vertaalserver gaf status ' + resp.status);
+        const data = await resp.json();
+        statusEl.textContent = 'Status: vertaling ontvangen';
+        return data.translatedText || '';
+      } catch (err) {
+        statusEl.textContent = 'Fout bij vertalen: ' + err.message;
+        return '';
+      }
+    }
+
+    // Functie: spreek Kroatisch via SpeechSynthesis
+    function speakCroatian(textToSpeak) {
+      if (!synthAvailable) {
+        statusEl.textContent = 'Geen SpeechSynthesis beschikbaar in deze browser.';
+        return;
+      }
+
+      statusEl.textContent = 'Status: afspelen Kroatisch...';
+
+      // Kies een stem die Kroatisch ondersteunt, indien aanwezig
+      const utter = new SpeechSynthesisUtterance(textToSpeak);
+      utter.lang = speakLang;
+
+      // probeer een passende stem te kiezen (lang exact match)
+      const voices = window.speechSynthesis.getVoices() || [];
+      for (let i = 0; i < voices.length; i++) {
+        if (voices[i].lang && voices[i].lang.toLowerCase().startsWith('hr')) {
+          utter.voice = voices[i];
+          break;
+        }
+      }
+
+      utter.onend = function() {
+        statusEl.textContent = 'Status: klaar';
+      };
+      utter.onerror = function(e) {
+        statusEl.textContent = 'Fout bij afspelen: ' + (e.error || e.message || 'onbekend');
+      };
+
+      window.speechSynthesis.cancel(); // stop eventueel lopende spraak
+      window.speechSynthesis.speak(utter);
+    }
+
+    // Combineer vertaling + spraak
+    async function translateAndSpeak() {
+      const sourceText = txtInput.value.trim();
+      if (!sourceText) {
+        statusEl.textContent = 'Voer eerst Nederlandse tekst in (spreken of typen).';
+        return;
+      }
+      btnTranslateAndSpeak.disabled = true;
+      const translated = await translateText(sourceText, 'nl', 'hr');
+      if (!translated) {
+        btnTranslateAndSpeak.disabled = false;
+        return;
+      }
+      // Toon vertaling (optie): zet in textarea
+      txtInput.value = sourceText + '\n\n[Kroatisch]\n' + translated;
+      btnPlayHR.disabled = false;
+      // Spreek automatisch
+      speakCroatian(translated);
+      btnTranslateAndSpeak.disabled = false;
+    }
+
+    // Event listeners voor knoppen
+    btnStartRec.addEventListener('click', function() { startRecording(); });
+    btnStopRec.addEventListener('click', function() { stopRecording(); });
+    btnTranslateAndSpeak.addEventListener('click', function() { translateAndSpeak(); });
+    btnPlayHR.addEventListener('click', function() {
+      // de laatste Kroatische tekst staat onder de Nederlandse in de textarea — pak na de marker
+      const all = txtInput.value;
+      const marker = '\n\n[Kroatisch]\n';
+      const idx = all.indexOf(marker);
+      let croText = '';
+      if (idx !== -1) croText = all.slice(idx + marker.length).trim();
+      else croText = all.trim();
+      if (croText) speakCroatian(croText);
+      else statusEl.textContent = 'Geen Kroatische tekst gevonden om af te spelen.';
+    });
+
+    // Enable/disable controls bij starten
+    // Indien er manual text wordt getypt, kan de gebruiker ook direct vertalen
+    txtInput.addEventListener('input', function() {
+      btnTranslateAndSpeak.disabled = txtInput.value.trim() === '';
+    });
+
+    // Zorg dat voices geladen zijn (Chrome lazy-load)
+    window.speechSynthesis.onvoiceschanged = function() {
+      // noop — stemmen worden automatisch gebruikt in speakCroatian
+    };
+
+    // Eenvoudige instructies voor de gebruiker
+    (function init() {
+      if (!recognitionAvailable) {
+        // Als geen browser STT: gebruiker moet typen
+        btnTranslateAndSpeak.disabled = txtInput.value.trim() === '';
+      } else {
+        btnTranslateAndSpeak.disabled = true;
+      }
+      if (!synthAvailable) btnPlayHR.disabled = true;
+    })();
+
+    // LET OP / PRODUCTIE:
+    // * LibreTranslate is een voorbeeld en kan CORS- of rate-limit issues hebben. Voor
+    //   serieuze apps gebruik je een betaalde vertaal-API (DeepL, Google Cloud Translate) met een server-side proxy.
+    // * Voor publicatie als native app kun je deze webapp verpakken met Capacitor of Cordova
+    //   of omzetten naar Flutter/React Native. Voor beste kwaliteit TTS kun je ook cloud-TTS (bijv. Google, Azure, ElevenLabs) gebruiken.
+
+  </script>
+</body>
+</html>
